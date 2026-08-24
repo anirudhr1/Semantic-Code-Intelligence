@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Semantic Code Intelligence</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+</head>
+<body>
+<div class="app-shell">
+
+  <!-- ── Header ─────────────────────────────────────────────────────────── -->
+  <header>
+    <div class="container header-inner">
+      <div class="logo">
+        <div class="logo-icon" aria-hidden="true">⚡</div>
+        Semantic Code Intelligence
+      </div>
+      <div class="header-status" id="api-status" aria-live="polite">
+        <div class="status-dot" id="status-dot"></div>
+        <span id="status-text">checking…</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Main ───────────────────────────────────────────────────────────── -->
+  <main>
+    <div class="container">
+
+      <!-- Tabs -->
+      <nav class="tabs" role="tablist" aria-label="Main sections">
+        <button class="tab-btn active" role="tab" aria-selected="true"
+                aria-controls="tab-search" id="btn-search"
+                data-tab="search">Search</button>
+        <button class="tab-btn" role="tab" aria-selected="false"
+                aria-controls="tab-index" id="btn-index"
+                data-tab="index">Index Repo</button>
+      </nav>
+
+      <!-- ── Search panel ────────────────────────────────────────────────── -->
+      <section class="tab-panel active" id="tab-search"
+               role="tabpanel" aria-labelledby="btn-search">
+
+        <div class="search-bar">
+          <input type="text" id="search-input"
+                 placeholder="Search code… e.g. 'parse JSON response' or 'calculate_distance'"
+                 aria-label="Search query"
+                 autocomplete="off"
+                 spellcheck="false" />
+          <button class="btn btn-primary" id="search-btn" type="button">
+            Search
+          </button>
+        </div>
+
+        <div class="search-filters" role="group" aria-label="Search filters">
+          <div>
+            <label for="filter-language">Language</label>
+            <select id="filter-language" aria-label="Filter by language">
+              <option value="">All languages</option>
+              <option value="python">Python</option>
+              <option value="javascript">JavaScript</option>
+              <option value="typescript">TypeScript</option>
+              <option value="go">Go</option>
+              <option value="rust">Rust</option>
+              <option value="java">Java</option>
+            </select>
+          </div>
+          <div>
+            <label for="filter-topk">Results</label>
+            <input type="number" id="filter-topk" value="10" min="1" max="100"
+                   aria-label="Number of results" />
+          </div>
+        </div>
+
+        <!-- Alert region -->
+        <div id="search-alert" role="alert" aria-live="assertive"></div>
+
+        <!-- Stats -->
+        <div id="search-stats" class="stats-bar" hidden aria-live="polite">
+          <div class="stat-item">
+            <span class="stat-label">Query</span>
+            <span class="stat-value" id="stat-query">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Results</span>
+            <span class="stat-value" id="stat-count">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Indexed chunks</span>
+            <span class="stat-value" id="stat-total">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Top score</span>
+            <span class="stat-value" id="stat-top-score">—</span>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div id="results-list" aria-live="polite" aria-label="Search results">
+          <div class="empty-state">
+            <div class="icon" aria-hidden="true">🔍</div>
+            <p>Enter a query above to search indexed code.</p>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ── Index panel ─────────────────────────────────────────────────── -->
+      <section class="tab-panel" id="tab-index"
+               role="tabpanel" aria-labelledby="btn-index">
+
+        <div class="card">
+          <div class="card-title">Repository source</div>
+
+          <div id="source-toggle" role="group" aria-label="Source type" style="margin-bottom:1rem;">
+            <button class="btn btn-primary" id="src-local-btn" type="button"
+                    data-source="local" aria-pressed="true">Local path</button>
+            <button class="btn btn-secondary" id="src-url-btn" type="button"
+                    data-source="url" aria-pressed="false">Git URL</button>
+          </div>
+
+          <div id="src-local" class="form-group">
+            <label for="repo-path">Local directory path</label>
+            <input type="text" id="repo-path"
+                   placeholder="e.g. /home/user/projects/my-repo or data/repos/my-repo"
+                   aria-label="Local repository path" />
+          </div>
+
+          <div id="src-url" class="form-group" hidden>
+            <label for="repo-url">Git repository URL</label>
+            <input type="url" id="repo-url"
+                   placeholder="https://github.com/owner/repo"
+                   aria-label="Git repository URL" />
+          </div>
+
+          <div class="input-row">
+            <div class="form-group">
+              <label for="index-language">Language filter</label>
+              <select id="index-language" aria-label="Language filter for indexing">
+                <option value="">All languages</option>
+                <option value="python">Python</option>
+                <option value="javascript">JavaScript</option>
+                <option value="typescript">TypeScript</option>
+                <option value="go">Go</option>
+                <option value="rust">Rust</option>
+                <option value="java">Java</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="repo-name">Repo name <small>(optional)</small></label>
+              <input type="text" id="repo-name"
+                     placeholder="my-project"
+                     aria-label="Repository name override" />
+            </div>
+          </div>
+
+          <div class="btn-group">
+            <button class="btn btn-primary" id="index-btn" type="button">
+              Index repository
+            </button>
+            <button class="btn btn-secondary" id="health-btn" type="button">
+              Check health
+            </button>
+          </div>
+        </div>
+
+        <!-- Progress -->
+        <div id="index-progress" hidden aria-live="polite">
+          <div class="progress-wrap">
+            <div class="progress-bar" role="progressbar"
+                 aria-label="Indexing progress" aria-valuemin="0" aria-valuemax="100">
+              <div class="progress-fill indeterminate" id="progress-fill"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Alert region -->
+        <div id="index-alert" role="alert" aria-live="assertive"></div>
+
+        <!-- Index result stats -->
+        <div id="index-stats" class="stats-bar" hidden aria-live="polite">
+          <div class="stat-item">
+            <span class="stat-label">Repo</span>
+            <span class="stat-value" id="istat-repo">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Chunks indexed</span>
+            <span class="stat-value" id="istat-chunks">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Files processed</span>
+            <span class="stat-value" id="istat-files">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Skipped files</span>
+            <span class="stat-value" id="istat-skipped">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Duration</span>
+            <span class="stat-value" id="istat-duration">—</span>
+          </div>
+        </div>
+
+      </section>
+
+    </div><!-- /container -->
+  </main>
+
+  <!-- ── Footer ─────────────────────────────────────────────────────────── -->
+  <footer>
+    <div class="container">
+      Semantic Code Intelligence &mdash;
+      <a href="/docs" target="_blank" rel="noopener">API docs</a> &middot;
+      <a href="https://github.com" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </footer>
+
+</div><!-- /app-shell -->
+
+<script src="app.js"></script>
+</body>
+</html>
