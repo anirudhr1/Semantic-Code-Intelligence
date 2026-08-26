@@ -24,7 +24,7 @@ from backend.app.ingestion.ast_extractor import (
     _fallback_whole_file,
     extract_chunks_from_source,
 )
-from backend.app.ingestion.repo_loader import detect_language, tokenise if False else None  # noqa
+from backend.app.ingestion.repo_loader import detect_language
 from backend.app.models.schemas import ChunkType, CodeChunk, Language
 
 

@@ -35,23 +35,22 @@ def _get_parser(language: Language):  # type: ignore[return]
         from tree_sitter import Language as TSLanguage, Parser
 
         lang_module_map = {
-            Language.python: ("tree_sitter_python", "python"),
-            Language.javascript: ("tree_sitter_javascript", "javascript"),
-            Language.typescript: ("tree_sitter_typescript", "typescript"),
-            Language.go: ("tree_sitter_go", "go"),
-            Language.rust: ("tree_sitter_rust", "rust"),
-            Language.java: ("tree_sitter_java", "java"),
+            Language.python: "tree_sitter_python",
+            Language.javascript: "tree_sitter_javascript",
+            Language.typescript: "tree_sitter_typescript",
+            Language.go: "tree_sitter_go",
+            Language.rust: "tree_sitter_rust",
+            Language.java: "tree_sitter_java",
         }
-        entry = lang_module_map.get(language)
-        if entry is None:
+        module_name = lang_module_map.get(language)
+        if module_name is None:
             return None
 
-        module_name, lang_name = entry
         import importlib
         lang_module = importlib.import_module(module_name)
-        ts_language = TSLanguage(lang_module.language(), lang_name)
-        parser = Parser()
-        parser.set_language(ts_language)
+        ts_language = TSLanguage(lang_module.language())
+        # tree-sitter 0.23+: Parser accepts Language directly in constructor
+        parser = Parser(ts_language)
         return parser
     except Exception as exc:  # pragma: no cover
         logger.warning("tree-sitter not available for %s: %s", language, exc)
