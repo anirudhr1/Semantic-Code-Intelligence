@@ -494,3 +494,11 @@ footer {
   .search-bar { flex-direction: column; }
   .result-filepath { display: none; }
 }
+
+/* ── Repo management ────────────────────────────────────────────────────────── */
+.repo-row:last-child { border-bottom: none !important; }
+
+.delete-clone-label input[type="checkbox"] {
+  width: auto !important;
+  flex-shrink: 0;
+}

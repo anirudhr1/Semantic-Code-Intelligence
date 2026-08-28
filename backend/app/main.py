@@ -27,6 +27,7 @@ from fastapi.responses import FileResponse
 from backend.app.config import settings
 from backend.app.api.routes_index import router as index_router
 from backend.app.api.routes_search import router as search_router
+from backend.app.api.routes_repos import router as repos_router
 from backend.app.indexing.vector_store import VectorStore
 from backend.app.indexing.keyword_index import KeywordIndex
 
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
     # ── API routers ───────────────────────────────────────────────────────────
     application.include_router(index_router, prefix="/api", tags=["indexing"])
     application.include_router(search_router, prefix="/api", tags=["search"])
+    application.include_router(repos_router, prefix="/api", tags=["repositories"])
 
     # ── Health check ──────────────────────────────────────────────────────────
     @application.get("/api/health", tags=["health"])

@@ -137,3 +137,37 @@ class SearchResponse(BaseModel):
     top_k: int
     total_indexed: int
     results: list[SearchResult]
+
+
+# ── Repo management API ───────────────────────────────────────────────────────
+
+class RepoInfo(BaseModel):
+    """Summary of a single indexed repository."""
+
+    repo_name: str
+    chunk_count: int
+    has_local_clone: bool = Field(
+        default=False,
+        description="True when source files are still on disk in REPOS_DIR.",
+    )
+    clone_size_mb: float = Field(
+        default=0.0,
+        description="Disk size of the cloned source tree in MB (0 if no clone).",
+    )
+
+
+class RepoListResponse(BaseModel):
+    """Response for GET /api/repos."""
+
+    repos: list[RepoInfo]
+    total_chunks: int
+
+
+class DeleteRepoResponse(BaseModel):
+    """Response for DELETE /api/repos/{repo_name}."""
+
+    repo_name: str
+    chunks_removed: int
+    clone_deleted: bool
+    freed_mb: float
+    message: str

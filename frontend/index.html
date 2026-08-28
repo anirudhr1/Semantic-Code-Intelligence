@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Semantic Code Intelligence</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/frontend/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -66,6 +66,13 @@
               <option value="go">Go</option>
               <option value="rust">Rust</option>
               <option value="java">Java</option>
+            </select>
+          </div>
+          <div>
+            <label for="filter-repo">Repository</label>
+            <select id="filter-repo" aria-label="Filter by repository">
+              <option value="">All repositories</option>
+              <!-- populated dynamically -->
             </select>
           </div>
           <div>
@@ -204,6 +211,35 @@
           </div>
         </div>
 
+        <!-- ── Manage indexed repos ──────────────────────────────────────── -->
+        <div class="card" style="margin-top:1.5rem;">
+          <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+            <span>Indexed repositories</span>
+            <button class="btn btn-secondary" id="refresh-repos-btn" type="button"
+                    style="font-size:0.75rem;padding:0.25rem 0.75rem;">
+              Refresh
+            </button>
+          </div>
+
+          <!-- Delete-clone toggle -->
+          <label class="delete-clone-label" style="display:flex;align-items:center;gap:0.5rem;
+                 font-size:0.82rem;color:var(--text-muted);margin-bottom:1rem;cursor:pointer;">
+            <input type="checkbox" id="delete-clone-toggle" checked
+                   style="width:auto;accent-color:var(--accent);" />
+            Also delete cloned source files from disk when removing a repo
+          </label>
+
+          <!-- Repo list -->
+          <div id="repo-list" aria-live="polite">
+            <div class="empty-state" style="padding:1.5rem 0;">
+              <p>No repositories indexed yet.</p>
+            </div>
+          </div>
+
+          <!-- Manage alert -->
+          <div id="manage-alert" role="alert" aria-live="assertive" style="margin-top:0.75rem;"></div>
+        </div>
+
       </section>
 
     </div><!-- /container -->
@@ -220,6 +256,6 @@
 
 </div><!-- /app-shell -->
 
-<script src="app.js"></script>
+<script src="/frontend/app.js"></script>
 </body>
 </html>

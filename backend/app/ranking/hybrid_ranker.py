@@ -90,6 +90,7 @@ class HybridRanker:
         *,
         top_k: int = 10,
         language_filter: Optional[Language] = None,
+        repo_filter: Optional[str] = None,
         embedder=None,
     ) -> SearchResponse:
         """
@@ -107,6 +108,8 @@ class HybridRanker:
             Number of results to return.
         language_filter:
             Restrict results to a specific programming language.
+        repo_filter:
+            When provided, only chunks from this repo_name are returned.
         embedder:
             ``Embedder`` instance used to encode the query.  If None, one is
             created via ``get_embedder()`` using the default model.
@@ -123,18 +126,19 @@ class HybridRanker:
         query_vector = embedder.encode_one(query)
 
         # ── 2. Retrieve candidates from both indexes ──────────────────────────
-        # Fetch more than top_k so fusion has a larger pool to re-rank.
         candidate_k = min(top_k * 10, max(vector_store.size, keyword_index.size, 1))
 
         sem_hits: list[tuple[CodeChunk, float]] = vector_store.search(
             query_vector,
             top_k=candidate_k,
             language_filter=language_filter,
+            repo_filter=repo_filter,
         )
         bm25_hits: list[tuple[CodeChunk, float]] = keyword_index.search(
             query,
             top_k=candidate_k,
             language_filter=language_filter,
+            repo_filter=repo_filter,
         )
 
         # ── 3. Build per-chunk score maps (keyed by chunk_id) ─────────────────

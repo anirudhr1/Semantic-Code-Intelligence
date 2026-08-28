@@ -3,14 +3,12 @@ routes_search.py
 ----------------
 GET /api/search
 
-Accepts a query string plus optional filters, runs the hybrid ranker, and
-returns a ranked list of SearchResult objects.
-
 Query parameters
 ~~~~~~~~~~~~~~~~
     q          (str, required)   — search query (natural language or symbol name)
     top_k      (int, default 10) — number of results to return (1–100)
     language   (str, optional)   — restrict to a specific language enum value
+    repo_name  (str, optional)   — restrict to a specific indexed repository
 """
 
 from __future__ import annotations
@@ -29,8 +27,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# ── Dependency helpers ────────────────────────────────────────────────────────
-
 def _get_vector_store(request: Request):
     return request.app.state.vector_store
 
@@ -38,8 +34,6 @@ def _get_vector_store(request: Request):
 def _get_keyword_index(request: Request):
     return request.app.state.keyword_index
 
-
-# ── Route ─────────────────────────────────────────────────────────────────────
 
 @router.get(
     "/search",
@@ -49,6 +43,7 @@ def _get_keyword_index(request: Request):
     description=(
         "Search indexed code chunks using a hybrid of semantic (cosine similarity) "
         "and keyword (BM25) ranking, optionally boosted by symbol-name matching. "
+        "Filter by language and/or repository. "
         "Returns up to `top_k` results sorted by fused relevance score."
     ),
 )
@@ -65,10 +60,14 @@ async def search(
         default=None,
         description="Filter results to a specific programming language.",
     ),
+    repo_name: Optional[str] = Query(
+        default=None,
+        description="Filter results to a specific indexed repository.",
+    ),
 ) -> SearchResponse:
     effective_top_k = top_k if top_k is not None else settings.default_top_k
 
-    vector_store = _get_vector_store(request)
+    vector_store  = _get_vector_store(request)
     keyword_index = _get_keyword_index(request)
 
     if vector_store.size == 0 and keyword_index.size == 0:
@@ -93,6 +92,7 @@ async def search(
             keyword_index=keyword_index,
             top_k=effective_top_k,
             language_filter=language,
+            repo_filter=repo_name,
             embedder=embedder,
         )
     except Exception as exc:
@@ -103,8 +103,9 @@ async def search(
         )
 
     logger.info(
-        "Search '%s' → %d results (top score %.3f).",
+        "Search '%s' (repo=%s) → %d results (top score %.3f).",
         q,
+        repo_name or "all",
         len(response.results),
         response.results[0].score if response.results else 0.0,
     )

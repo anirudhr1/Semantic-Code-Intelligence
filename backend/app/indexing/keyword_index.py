@@ -133,6 +133,7 @@ class KeywordIndex:
         query: str,
         top_k: int = 10,
         language_filter: Optional[Language] = None,
+        repo_filter: Optional[str] = None,
     ) -> list[tuple[CodeChunk, float]]:
         """
         Retrieve the top-k chunks matching ``query`` using BM25.
@@ -156,6 +157,8 @@ class KeywordIndex:
         for chunk, score in zip(self._chunks, raw_scores):
             if language_filter and chunk.language != language_filter.value:
                 continue
+            if repo_filter and chunk.repo_name != repo_filter:
+                continue
             paired.append((chunk, score))
 
         # Sort descending
@@ -174,10 +177,43 @@ class KeywordIndex:
 
     def clear(self) -> None:
         """Remove all documents from the index."""
-        self._bm25 = None
+        self._bm25   = None
         self._chunks = []
         self._corpus = []
         logger.info("KeywordIndex cleared.")
+
+    def delete_repo(self, repo_name: str) -> int:
+        """
+        Remove all chunks belonging to ``repo_name`` and rebuild BM25.
+
+        Returns the number of chunks removed.
+        """
+        pairs = [
+            (c, tok)
+            for c, tok in zip(self._chunks, self._corpus)
+            if c.repo_name != repo_name
+        ]
+        removed = len(self._chunks) - len(pairs)
+        if removed == 0:
+            return 0
+
+        self._chunks = [c for c, _ in pairs]
+        self._corpus = [tok for _, tok in pairs]
+
+        if self._chunks:
+            self._rebuild()
+        else:
+            self._bm25 = None
+
+        logger.info(
+            "Deleted %d chunks for repo '%s'. Remaining: %d.",
+            removed, repo_name, self.size,
+        )
+        return removed
+
+    def list_repos(self) -> list[str]:
+        """Return sorted list of distinct repo_name values in the index."""
+        return sorted({c.repo_name for c in self._chunks if c.repo_name})
 
     # ── Persistence ───────────────────────────────────────────────────────────
 

@@ -5,32 +5,30 @@
  *  - Tab navigation (Search / Index Repo)
  *  - Health-check polling with status indicator
  *  - Search form → GET /api/search → render result cards
+ *    • repo dropdown populated from GET /api/repos
+ *    • repo_name filter wired into search params
  *  - Index form → POST /api/index → show progress + summary
- *
- * No build step, no framework — plain ES2021 modules loaded directly.
- * The API base URL is auto-detected as the same origin that serves this page.
+ *  - Repo management card → list repos, delete individual repos
  */
 
 "use strict";
 
-// ── Config ──────────────────────────────────────────────────────────────────
-const API_BASE = "";   // same origin; change to "http://localhost:8000" for dev
+const API_BASE          = "";
 const HEALTH_INTERVAL_MS = 30_000;
 
-// ── DOM refs ─────────────────────────────────────────────────────────────────
+// ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = (sel, ctx = document) => ctx.querySelector(sel);
-const $$ = (sel, ctx = document) => [...ctx.querySelectorAll(sel)];
 
 const statusDot    = $("#status-dot");
 const statusText   = $("#status-text");
-
-const tabBtns      = $$(".tab-btn");
-const tabPanels    = $$(".tab-panel");
+const tabBtns      = [...document.querySelectorAll(".tab-btn")];
+const tabPanels    = [...document.querySelectorAll(".tab-panel")];
 
 // Search panel
 const searchInput  = $("#search-input");
 const searchBtn    = $("#search-btn");
 const filterLang   = $("#filter-language");
+const filterRepo   = $("#filter-repo");
 const filterTopK   = $("#filter-topk");
 const searchAlert  = $("#search-alert");
 const searchStats  = $("#search-stats");
@@ -41,90 +39,69 @@ const statTotal    = $("#stat-total");
 const statTopScore = $("#stat-top-score");
 
 // Index panel
-const srcLocalBtn  = $("#src-local-btn");
-const srcUrlBtn    = $("#src-url-btn");
-const srcLocalDiv  = $("#src-local");
-const srcUrlDiv    = $("#src-url");
-const repoPath     = $("#repo-path");
-const repoUrl      = $("#repo-url");
-const indexLang    = $("#index-language");
-const repoName     = $("#repo-name");
-const indexBtn     = $("#index-btn");
-const healthBtn    = $("#health-btn");
-const indexProgress = $("#index-progress");
-const progressFill = $("#progress-fill");
-const indexAlert   = $("#index-alert");
-const indexStats   = $("#index-stats");
-const istatRepo    = $("#istat-repo");
-const istatChunks  = $("#istat-chunks");
-const istatFiles   = $("#istat-files");
-const istatSkipped = $("#istat-skipped");
-const istatDuration = $("#istat-duration");
+const srcLocalBtn      = $("#src-local-btn");
+const srcUrlBtn        = $("#src-url-btn");
+const srcLocalDiv      = $("#src-local");
+const srcUrlDiv        = $("#src-url");
+const repoPath         = $("#repo-path");
+const repoUrl          = $("#repo-url");
+const indexLang        = $("#index-language");
+const repoName         = $("#repo-name");
+const indexBtn         = $("#index-btn");
+const healthBtn        = $("#health-btn");
+const indexProgress    = $("#index-progress");
+const progressFill     = $("#progress-fill");
+const indexAlert       = $("#index-alert");
+const indexStats       = $("#index-stats");
+const istatRepo        = $("#istat-repo");
+const istatChunks      = $("#istat-chunks");
+const istatFiles       = $("#istat-files");
+const istatSkipped     = $("#istat-skipped");
+const istatDuration    = $("#istat-duration");
+
+// Repo management
+const refreshReposBtn    = $("#refresh-repos-btn");
+const deleteCloneToggle  = $("#delete-clone-toggle");
+const repoListEl         = $("#repo-list");
+const manageAlert        = $("#manage-alert");
 
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
-/** Show an alert message inside `container`. */
 function showAlert(container, message, type = "info") {
-  container.innerHTML = `
-    <div class="alert alert-${type}" role="alert">
-      <span>${escapeHtml(message)}</span>
-    </div>`;
+  container.innerHTML = `<div class="alert alert-${type}" role="alert"><span>${escapeHtml(message)}</span></div>`;
 }
-
-function clearAlert(container) {
-  container.innerHTML = "";
-}
+function clearAlert(container) { container.innerHTML = ""; }
 
 function escapeHtml(str) {
   return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
-
 function escapeCode(str) {
-  return String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return String(str).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
-/** Truncate a string to maxLen chars with ellipsis. */
 function truncate(str, maxLen = 60) {
   if (!str) return "";
   return str.length > maxLen ? str.slice(0, maxLen) + "…" : str;
 }
+function pct(val) { return (val * 100).toFixed(1) + "%"; }
 
-/** Format a float as a percentage string, e.g. 0.873 → "87.3%" */
-function pct(val) {
-  return (val * 100).toFixed(1) + "%";
-}
-
-/**
- * Lightweight fetch wrapper with JSON body/response handling.
- * Throws an Error with the server's `detail` message on non-2xx responses.
- */
 async function apiFetch(path, options = {}) {
-  const url = `${API_BASE}${path}`;
-  const res = await fetch(url, {
+  const res = await fetch(`${API_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...options.headers },
     ...options,
   });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
-    try {
-      const err = await res.json();
-      detail = err.detail ?? detail;
-    } catch (_) { /* ignore */ }
+    try { detail = (await res.json()).detail ?? detail; } catch (_) {}
     throw new Error(detail);
   }
   return res.json();
 }
 
 
-// ── Tab navigation ────────────────────────────────────────────────────────────
+// ── Tab navigation ─────────────────────────────────────────────────────────────
 
 function activateTab(tabName) {
   tabBtns.forEach(btn => {
@@ -135,109 +112,122 @@ function activateTab(tabName) {
   tabPanels.forEach(panel => {
     panel.classList.toggle("active", panel.id === `tab-${tabName}`);
   });
+  // Load repo list whenever Index tab becomes visible
+  if (tabName === "index") loadRepos();
 }
 
-tabBtns.forEach(btn => {
-  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
-});
+tabBtns.forEach(btn => btn.addEventListener("click", () => activateTab(btn.dataset.tab)));
 
 
-// ── Health check ──────────────────────────────────────────────────────────────
+// ── Health check ───────────────────────────────────────────────────────────────
 
 async function checkHealth(quiet = false) {
   try {
     const data = await apiFetch("/api/health");
-    statusDot.className = "status-dot ok";
-    statusText.textContent =
-      `API ok · ${data.vector_store_size ?? 0} chunks`;
-
+    statusDot.className   = "status-dot ok";
+    statusText.textContent = `API ok · ${data.vector_store_size ?? 0} chunks`;
     if (!quiet) {
-      showAlert(
-        indexAlert,
-        `API healthy · model: ${data.embedding_model} · ` +
-        `chunks: ${data.vector_store_size} · uptime: ${data.uptime_seconds}s`,
-        "success",
-      );
+      showAlert(indexAlert,
+        `API healthy · model: ${data.embedding_model} · chunks: ${data.vector_store_size} · uptime: ${data.uptime_seconds}s`,
+        "success");
     }
   } catch (err) {
-    statusDot.className = "status-dot err";
+    statusDot.className   = "status-dot err";
     statusText.textContent = "API unreachable";
     if (!quiet) showAlert(indexAlert, `Health check failed: ${err.message}`, "error");
   }
 }
 
 healthBtn.addEventListener("click", () => checkHealth(false));
-
-// Poll health silently after the initial check.
 checkHealth(true);
 setInterval(() => checkHealth(true), HEALTH_INTERVAL_MS);
 
 
-// ── Search ────────────────────────────────────────────────────────────────────
+// ── Repo dropdown (search panel) ───────────────────────────────────────────────
+
+/**
+ * Fetch GET /api/repos and populate the filter-repo <select>.
+ * Preserves the currently selected value if it still exists.
+ */
+async function refreshRepoDropdown() {
+  try {
+    const data = await apiFetch("/api/repos");
+    const current = filterRepo.value;
+
+    // Keep "All repositories" as first option, then add one per repo.
+    filterRepo.innerHTML = '<option value="">All repositories</option>';
+    (data.repos || []).forEach(r => {
+      const opt = document.createElement("option");
+      opt.value       = r.repo_name;
+      opt.textContent = `${r.repo_name} (${r.chunk_count.toLocaleString()} chunks)`;
+      filterRepo.appendChild(opt);
+    });
+
+    // Restore selection if it still exists.
+    if (current && [...filterRepo.options].some(o => o.value === current)) {
+      filterRepo.value = current;
+    }
+  } catch (_) {
+    // Silently ignore — dropdown stays as "All repositories".
+  }
+}
+
+// Populate on first load.
+refreshRepoDropdown();
+
+
+// ── Search ─────────────────────────────────────────────────────────────────────
 
 async function runSearch() {
   const query = searchInput.value.trim();
-  if (!query) {
-    showAlert(searchAlert, "Please enter a search query.", "warning");
-    return;
-  }
+  if (!query) { showAlert(searchAlert, "Please enter a search query.", "warning"); return; }
 
   clearAlert(searchAlert);
-  searchBtn.disabled = true;
-  searchBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Searching…';
+  searchBtn.disabled    = true;
+  searchBtn.innerHTML   = '<span class="spinner" aria-hidden="true"></span> Searching…';
   resultsList.innerHTML = "";
-  searchStats.hidden = true;
+  searchStats.hidden    = true;
 
   const params = new URLSearchParams({ q: query });
   const topK = parseInt(filterTopK.value, 10);
   if (!isNaN(topK) && topK > 0) params.set("top_k", topK);
-  const lang = filterLang.value;
-  if (lang) params.set("language", lang);
+  if (filterLang.value)  params.set("language",  filterLang.value);
+  if (filterRepo.value)  params.set("repo_name", filterRepo.value);
 
   try {
     const data = await apiFetch(`/api/search?${params}`);
     renderResults(data);
   } catch (err) {
     showAlert(searchAlert, err.message, "error");
-    resultsList.innerHTML = `
-      <div class="empty-state">
-        <div class="icon" aria-hidden="true">⚠️</div>
-        <p>Search failed. Check the alert above.</p>
-      </div>`;
+    resultsList.innerHTML = `<div class="empty-state"><div class="icon" aria-hidden="true">⚠️</div><p>Search failed. Check the alert above.</p></div>`;
   } finally {
-    searchBtn.disabled = false;
+    searchBtn.disabled    = false;
     searchBtn.textContent = "Search";
   }
 }
 
 function renderResults(data) {
-  // Update stats bar
-  statQuery.textContent = truncate(data.query, 50);
-  statCount.textContent = data.results.length;
-  statTotal.textContent = data.total_indexed.toLocaleString();
-  statTopScore.textContent = data.results.length
-    ? pct(data.results[0].score)
-    : "—";
-  searchStats.hidden = false;
+  statQuery.textContent    = truncate(data.query, 50);
+  statCount.textContent    = data.results.length;
+  statTotal.textContent    = data.total_indexed.toLocaleString();
+  statTopScore.textContent = data.results.length ? pct(data.results[0].score) : "—";
+  searchStats.hidden       = false;
 
   if (!data.results.length) {
     resultsList.innerHTML = `
       <div class="empty-state">
         <div class="icon" aria-hidden="true">🔍</div>
         <p>No results found for <strong>${escapeHtml(data.query)}</strong>.
-           Try a broader query or index more repositories.</p>
+           Try a broader query or choose a different repository.</p>
       </div>`;
     return;
   }
-
-  resultsList.innerHTML = data.results
-    .map((r, i) => buildResultCard(r, i + 1))
-    .join("");
+  resultsList.innerHTML = data.results.map((r, i) => buildResultCard(r, i + 1)).join("");
 }
 
 function buildResultCard(r, rank) {
   const symbol   = r.symbol_name ? escapeHtml(r.symbol_name) : "(anonymous)";
-  const lang     = r.language ?? "unknown";
+  const lang     = r.language   ?? "unknown";
   const type     = r.chunk_type ?? "block";
   const filepath = escapeHtml(r.file_path ?? "");
   const code     = escapeCode(r.code ?? "");
@@ -249,21 +239,15 @@ function buildResultCard(r, rank) {
   <div class="result-header">
     <span class="result-rank" aria-label="Rank">#${rank}</span>
     <span class="result-symbol">${symbol}</span>
-    <span class="badge badge-lang" title="Language">${escapeHtml(lang)}</span>
-    <span class="badge badge-type" title="Chunk type">${escapeHtml(type)}</span>
+    <span class="badge badge-lang"  title="Language">${escapeHtml(lang)}</span>
+    <span class="badge badge-type"  title="Chunk type">${escapeHtml(type)}</span>
     <span class="badge badge-score" title="Fused relevance score">${pct(r.score)}</span>
-    <span class="result-filepath" title="${filepath}">${filepath}</span>
+    <span class="result-filepath"   title="${filepath}">${filepath}</span>
   </div>
   <div class="result-scores" aria-label="Score breakdown">
-    <span class="score-chip">
-      <span>sem</span><span>${pct(r.semantic_score ?? 0)}</span>
-    </span>
-    <span class="score-chip">
-      <span>bm25</span><span>${pct(r.bm25_score ?? 0)}</span>
-    </span>
-    <span class="score-chip">
-      <span>sym</span><span>${pct(r.symbol_score ?? 0)}</span>
-    </span>
+    <span class="score-chip"><span>sem</span><span>${pct(r.semantic_score  ?? 0)}</span></span>
+    <span class="score-chip"><span>bm25</span><span>${pct(r.bm25_score     ?? 0)}</span></span>
+    <span class="score-chip"><span>sym</span><span>${pct(r.symbol_score    ?? 0)}</span></span>
   </div>
   <pre class="result-code" tabindex="0" aria-label="Source code"><code>${code}</code></pre>
   <div class="result-footer">
@@ -275,24 +259,18 @@ function buildResultCard(r, rank) {
 </article>`;
 }
 
-/** Copy the code from the nearest result-card to clipboard. */
 window.copyCode = async function copyCode(btn) {
-  const card = btn.closest(".result-card");
-  const code = card?.querySelector("pre.result-code")?.textContent ?? "";
+  const code = btn.closest(".result-card")?.querySelector("pre.result-code")?.textContent ?? "";
   try {
     await navigator.clipboard.writeText(code);
     const orig = btn.textContent;
     btn.textContent = "Copied!";
     setTimeout(() => { btn.textContent = orig; }, 1500);
-  } catch (_) {
-    btn.textContent = "Failed";
-  }
+  } catch (_) { btn.textContent = "Failed"; }
 };
 
 searchBtn.addEventListener("click", runSearch);
-searchInput.addEventListener("keydown", e => {
-  if (e.key === "Enter") runSearch();
-});
+searchInput.addEventListener("keydown", e => { if (e.key === "Enter") runSearch(); });
 
 
 // ── Index form — source toggle ────────────────────────────────────────────────
@@ -301,25 +279,17 @@ let sourceMode = "local";
 
 function setSourceMode(mode) {
   sourceMode = mode;
-  if (mode === "local") {
-    srcLocalDiv.hidden = false;
-    srcUrlDiv.hidden   = true;
-    srcLocalBtn.className = "btn btn-primary";
-    srcLocalBtn.setAttribute("aria-pressed", "true");
-    srcUrlBtn.className   = "btn btn-secondary";
-    srcUrlBtn.setAttribute("aria-pressed", "false");
-  } else {
-    srcLocalDiv.hidden = true;
-    srcUrlDiv.hidden   = false;
-    srcLocalBtn.className = "btn btn-secondary";
-    srcLocalBtn.setAttribute("aria-pressed", "false");
-    srcUrlBtn.className   = "btn btn-primary";
-    srcUrlBtn.setAttribute("aria-pressed", "true");
-  }
+  const isLocal = mode === "local";
+  srcLocalDiv.hidden        = !isLocal;
+  srcUrlDiv.hidden          =  isLocal;
+  srcLocalBtn.className     = isLocal ? "btn btn-primary"   : "btn btn-secondary";
+  srcUrlBtn.className       = isLocal ? "btn btn-secondary" : "btn btn-primary";
+  srcLocalBtn.setAttribute("aria-pressed", String(isLocal));
+  srcUrlBtn.setAttribute("aria-pressed",   String(!isLocal));
 }
 
 srcLocalBtn.addEventListener("click", () => setSourceMode("local"));
-srcUrlBtn.addEventListener("click", () => setSourceMode("url"));
+srcUrlBtn.addEventListener("click",   () => setSourceMode("url"));
 
 
 // ── Index repo ────────────────────────────────────────────────────────────────
@@ -338,22 +308,18 @@ async function runIndex() {
     if (!u) { showAlert(indexAlert, "Enter a git repository URL.", "warning"); return; }
     body.repo_url = u;
   }
-  if (indexLang.value) body.language = indexLang.value;
-  if (repoName.value.trim()) body.repo_name = repoName.value.trim();
+  if (indexLang.value)        body.language  = indexLang.value;
+  if (repoName.value.trim())  body.repo_name = repoName.value.trim();
 
-  indexBtn.disabled = true;
-  indexBtn.innerHTML = '<span class="spinner" aria-hidden="true"></span> Indexing…';
-  indexProgress.hidden = false;
+  indexBtn.disabled      = true;
+  indexBtn.innerHTML     = '<span class="spinner" aria-hidden="true"></span> Indexing…';
+  indexProgress.hidden   = false;
   progressFill.className = "progress-fill indeterminate";
 
   try {
-    const data = await apiFetch("/api/index", {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    const data = await apiFetch("/api/index", { method: "POST", body: JSON.stringify(body) });
 
-    // Stop animation and fill bar to 100%
-    progressFill.className = "progress-fill";
+    progressFill.className  = "progress-fill";
     progressFill.style.width = "100%";
 
     istatRepo.textContent     = data.repo_name;
@@ -363,23 +329,111 @@ async function runIndex() {
     istatDuration.textContent = `${data.duration_seconds}s`;
     indexStats.hidden = false;
 
-    showAlert(
-      indexAlert,
+    showAlert(indexAlert,
       `Indexed ${data.chunks_indexed.toLocaleString()} chunks from "${data.repo_name}" in ${data.duration_seconds}s.`,
-      "success",
-    );
+      "success");
 
-    // Refresh health stats in the header
+    // Refresh both header and the repo list + search dropdown.
     checkHealth(true);
+    loadRepos();
+    refreshRepoDropdown();
   } catch (err) {
-    progressFill.className = "progress-fill";
+    progressFill.className   = "progress-fill";
     progressFill.style.width = "0%";
     showAlert(indexAlert, `Indexing failed: ${err.message}`, "error");
   } finally {
-    indexBtn.disabled = false;
-    indexBtn.textContent = "Index repository";
+    indexBtn.disabled     = false;
+    indexBtn.textContent  = "Index repository";
     setTimeout(() => { indexProgress.hidden = true; }, 1200);
   }
 }
 
 indexBtn.addEventListener("click", runIndex);
+
+
+// ── Repo management ───────────────────────────────────────────────────────────
+
+async function loadRepos() {
+  repoListEl.innerHTML = `<p style="color:var(--text-muted);font-size:0.85rem;">Loading…</p>`;
+  clearAlert(manageAlert);
+
+  try {
+    const data = await apiFetch("/api/repos");
+
+    if (!data.repos || data.repos.length === 0) {
+      repoListEl.innerHTML = `
+        <div class="empty-state" style="padding:1.5rem 0;">
+          <p>No repositories indexed yet.</p>
+        </div>`;
+      return;
+    }
+
+    repoListEl.innerHTML = data.repos.map(r => buildRepoRow(r)).join("");
+  } catch (err) {
+    repoListEl.innerHTML = "";
+    showAlert(manageAlert, `Failed to load repos: ${err.message}`, "error");
+  }
+}
+
+function buildRepoRow(r) {
+  const cloneInfo = r.has_local_clone
+    ? `<span class="badge badge-type" title="Clone on disk">📁 ${r.clone_size_mb} MB</span>`
+    : `<span class="badge" style="background:rgba(139,144,176,0.15);color:var(--text-muted);">no clone</span>`;
+
+  return `
+<div class="repo-row" id="repo-row-${CSS.escape(r.repo_name)}"
+     style="display:flex;align-items:center;justify-content:space-between;
+            gap:0.75rem;padding:0.65rem 0;border-bottom:1px solid var(--border);flex-wrap:wrap;">
+  <div style="display:flex;align-items:center;gap:0.6rem;min-width:0;">
+    <span style="font-family:var(--font-mono);font-size:0.88rem;font-weight:600;
+                 color:var(--accent);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+      ${escapeHtml(r.repo_name)}
+    </span>
+    <span class="badge badge-score">${r.chunk_count.toLocaleString()} chunks</span>
+    ${cloneInfo}
+  </div>
+  <button class="btn btn-danger"
+          style="font-size:0.78rem;padding:0.3rem 0.75rem;flex-shrink:0;"
+          aria-label="Remove ${escapeHtml(r.repo_name)}"
+          onclick="confirmDeleteRepo('${escapeHtml(r.repo_name)}')">
+    Remove
+  </button>
+</div>`;
+}
+
+window.confirmDeleteRepo = async function confirmDeleteRepo(repoName) {
+  const deleteClone = deleteCloneToggle.checked;
+  const cloneNote   = deleteClone ? " and delete its source files from disk" : "";
+  const confirmed   = confirm(
+    `Remove "${repoName}" from the index${cloneNote}?\n\nThis cannot be undone.`
+  );
+  if (!confirmed) return;
+
+  clearAlert(manageAlert);
+
+  // Visually mark the row as being removed.
+  const row = document.getElementById(`repo-row-${CSS.escape(repoName)}`);
+  if (row) {
+    row.style.opacity = "0.4";
+    row.style.pointerEvents = "none";
+  }
+
+  try {
+    const params = new URLSearchParams({ delete_clone: deleteClone });
+    const data   = await apiFetch(`/api/repos/${encodeURIComponent(repoName)}?${params}`, {
+      method: "DELETE",
+    });
+
+    showAlert(manageAlert, data.message, "success");
+
+    // Refresh everything that depends on the repo list.
+    loadRepos();
+    refreshRepoDropdown();
+    checkHealth(true);
+  } catch (err) {
+    if (row) { row.style.opacity = ""; row.style.pointerEvents = ""; }
+    showAlert(manageAlert, `Failed to remove "${repoName}": ${err.message}`, "error");
+  }
+};
+
+refreshReposBtn.addEventListener("click", loadRepos);
