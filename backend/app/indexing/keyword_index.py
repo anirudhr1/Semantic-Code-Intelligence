@@ -55,16 +55,13 @@ def tokenise(text: str) -> list[str]:
     Convert source text to a lowercase token list suitable for BM25.
 
     Steps:
-    1. Split camelCase → separate tokens.
+    1. Split camelCase → separate tokens (requires mixed case — must come first).
     2. Split on common code delimiters.
-    3. Lowercase and drop empty / single-char tokens.
+    3. Lowercase the joined result once, then filter single-char tokens.
     """
-    # Split camelCase
-    text = _CAMEL_RE.sub(" ", text)
-    # Split on delimiters
-    raw_tokens = _SPLIT_RE.split(text)
-    # Normalise and filter
-    return [t.lower() for t in raw_tokens if len(t) > 1]
+    text = _CAMEL_RE.sub(" ", text)      # camelCase split must happen before lowercasing
+    text = _SPLIT_RE.sub(" ", text)      # replace all delimiters with spaces
+    return [t for t in text.lower().split() if len(t) > 1]  # lowercase once on the full string
 
 
 def _chunk_to_token_list(chunk: CodeChunk) -> list[str]:

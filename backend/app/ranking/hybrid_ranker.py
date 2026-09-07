@@ -31,7 +31,6 @@ Public API
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Optional
 
 from backend.app.models.schemas import (

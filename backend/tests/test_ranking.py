@@ -16,7 +16,6 @@ Run:
 
 from __future__ import annotations
 
-import uuid
 from typing import Optional
 from unittest.mock import MagicMock, patch
 
@@ -63,11 +62,12 @@ def _make_chunks(n: int) -> list[CodeChunk]:
         _make_chunk(
             code=f"def func_{i}(x): return x * {i}",
             symbol_name=f"func_{i}",
-            start_line=i,
-            end_line=i,
+            start_line=i + 1,
+            end_line=i + 1,
         )
         for i in range(n)
     ]
+
 
 
 # ── Fake VectorStore and KeywordIndex for ranker tests ────────────────────────
@@ -81,8 +81,12 @@ class _FakeVectorStore:
     def size(self) -> int:
         return len(self._chunks)
 
-    def search(self, query_vector, top_k=10, language_filter=None):
+    def search(self, query_vector, top_k=10, language_filter=None, repo_filter=None):
         pairs = list(zip(self._chunks, self._scores))
+        if language_filter:
+            pairs = [p for p in pairs if p[0].language == language_filter]
+        if repo_filter:
+            pairs = [p for p in pairs if p[0].repo_name == repo_filter]
         pairs.sort(key=lambda x: x[1], reverse=True)
         return pairs[:top_k]
 
@@ -96,8 +100,12 @@ class _FakeKeywordIndex:
     def size(self) -> int:
         return len(self._chunks)
 
-    def search(self, query, top_k=10, language_filter=None):
+    def search(self, query, top_k=10, language_filter=None, repo_filter=None):
         pairs = list(zip(self._chunks, self._scores))
+        if language_filter:
+            pairs = [p for p in pairs if p[0].language == language_filter]
+        if repo_filter:
+            pairs = [p for p in pairs if p[0].repo_name == repo_filter]
         pairs.sort(key=lambda x: x[1], reverse=True)
         return pairs[:top_k]
 

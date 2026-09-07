@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -27,6 +27,10 @@ from backend.app.utils.chunking import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Batch size used when embedding chunks. Exposed as a module constant so it
+# is easy to tune without hunting through the request handler body.
+_EMBEDDING_BATCH_SIZE = 64
 
 
 # ── Progress state ────────────────────────────────────────────────────────────
@@ -206,18 +210,17 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
 
             # Pre-allocate the full output array — avoids building a list of
             # intermediate arrays and calling np.concatenate at the end.
-            _BATCH = 64
             embeddings = np.empty(
                 (len(all_chunks), embedder.dimension), dtype=np.float32
             )
 
-            for i in range(0, len(all_chunks), _BATCH):
-                batch = all_chunks[i : i + _BATCH]
+            for i in range(0, len(all_chunks), _EMBEDDING_BATCH_SIZE):
+                batch = all_chunks[i : i + _EMBEDDING_BATCH_SIZE]
                 # encode_chunks is the single source of truth for chunk→text
                 # conversion (symbol_name + docstring + code).  No local
                 # _chunk_text duplicate needed.
                 embeddings[i : i + len(batch)] = embedder.encode_chunks(batch)
-                progress.chunks_done = min(i + _BATCH, len(all_chunks))
+                progress.chunks_done = min(i + _EMBEDDING_BATCH_SIZE, len(all_chunks))
                 progress.message = (
                     f"Embedding {progress.chunks_done}/{len(all_chunks)} chunks…"
                 )
