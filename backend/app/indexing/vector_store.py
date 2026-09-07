@@ -108,20 +108,29 @@ class VectorStore:
         query_vector: np.ndarray,
         top_k: int = 10,
         language_filter: Optional[Language] = None,
-        repo_filter: Optional[str] = None,
+        repo_filter: Optional["str | list[str]"] = None,
     ) -> list[tuple[CodeChunk, float]]:
         """
         Find the top-k most similar chunks.
 
         Supports optional post-filters for language and repo_name.
+        repo_filter can be a single repo name or a list of repo names.
         """
         if self._index is None or self.size == 0:
             return []
 
+        # Normalise repo_filter to a set for fast membership checks.
+        repo_set: Optional[set[str]] = None
+        if repo_filter:
+            if isinstance(repo_filter, str):
+                repo_set = {repo_filter}
+            else:
+                repo_set = set(repo_filter)
+
         query = query_vector.astype(np.float32).reshape(1, -1)
 
         # Fetch more when filtering so we still fill top_k after removals.
-        any_filter = language_filter or repo_filter
+        any_filter = language_filter or repo_set
         fetch_k = min(top_k * 5 if any_filter else top_k, self.size)
 
         scores_matrix, idx_matrix = self._index.search(query, fetch_k)
@@ -135,7 +144,7 @@ class VectorStore:
             chunk = self._chunks[int(idx)]
             if language_filter and chunk.language != language_filter.value:
                 continue
-            if repo_filter and chunk.repo_name != repo_filter:
+            if repo_set and chunk.repo_name not in repo_set:
                 continue
             results.append((chunk, float(np.clip(score, 0.0, 1.0))))
             if len(results) >= top_k:
@@ -177,6 +186,48 @@ class VectorStore:
         logger.info(
             "Deleted %d chunks for repo '%s'. Remaining: %d.",
             removed, repo_name, self.size,
+        )
+        return removed
+
+    def delete_by_file(self, repo_name: str, file_path: str) -> int:
+        """
+        Remove all chunks for a specific file within a repo and rebuild FAISS.
+
+        Used by incremental re-indexing to remove stale chunks before
+        re-inserting updated ones — avoids purging the entire repo.
+
+        Returns the number of chunks removed.
+        """
+        if self._embeddings is None or not self._chunks:
+            return 0
+
+        keep_mask = np.array(
+            [
+                not (c.repo_name == repo_name and c.file_path == file_path)
+                for c in self._chunks
+            ],
+            dtype=bool,
+        )
+        removed = int((~keep_mask).sum())
+        if removed == 0:
+            return 0
+
+        kept_chunks     = [c for c, keep in zip(self._chunks, keep_mask) if keep]
+        kept_embeddings = self._embeddings[keep_mask]
+
+        self._chunks     = kept_chunks
+        self._embeddings = kept_embeddings if len(kept_embeddings) > 0 else None
+
+        if kept_chunks:
+            self._index = _make_index(self._dimension)
+            self._index.add(kept_embeddings.astype(np.float32))
+        else:
+            self._index     = None
+            self._dimension = 0
+
+        logger.debug(
+            "Deleted %d chunks for file '%s' in repo '%s'. Remaining: %d.",
+            removed, file_path, repo_name, self.size,
         )
         return removed
 

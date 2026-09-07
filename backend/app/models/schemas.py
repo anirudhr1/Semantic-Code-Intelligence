@@ -86,6 +86,10 @@ class IndexRequest(BaseModel):
         default=None,
         description="Human-readable identifier stored on each chunk. Defaults to directory name.",
     )
+    force: bool = Field(
+        default=False,
+        description="When True, bypass incremental indexing and re-index all files from scratch.",
+    )
 
     @model_validator(mode="after")
     def exactly_one_source(self) -> "IndexRequest":
@@ -103,6 +107,7 @@ class IndexResponse(BaseModel):
     chunks_indexed: int
     files_processed: int
     skipped_files: int
+    skipped_unchanged: int = 0
     duration_seconds: float
     message: str = "Indexing complete."
 

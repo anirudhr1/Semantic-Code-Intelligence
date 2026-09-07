@@ -1,17 +1,19 @@
 """
 hybrid_ranker.py
 ----------------
-Fuses semantic (FAISS cosine), keyword (BM25), and symbol-name match scores
-into a single ranked list of SearchResult objects.
+Fuses semantic (FAISS cosine), keyword (BM25), symbol-name match, and
+exact-match scores into a single ranked list of SearchResult objects.
 
 Fusion formula
 ~~~~~~~~~~~~~~
     fused = w_sem * sem_score
           + w_bm25 * bm25_score
           + w_sym  * symbol_score
+          + exact_match_boost
 
-All three component scores are in [0, 1] before fusion, so the fused score
-is also in [0, 1] when the weights sum to 1.
+All component scores are in [0, 1] before fusion. The exact-match boost
+is a small additive bonus (0–0.15) that rewards literal string matches
+in code that embedding models may miss.
 
 Symbol-name scoring
 ~~~~~~~~~~~~~~~~~~~
@@ -25,13 +27,13 @@ Public API
 ~~~~~~~~~~
     HybridRanker(semantic_weight, bm25_weight, symbol_weight)
     .rank(query, vector_store, keyword_index, top_k, language_filter,
-          embedder) → SearchResponse
+          repo_filter, embedder) → SearchResponse
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Optional
+from typing import Optional, Union
 
 from backend.app.models.schemas import (
     CodeChunk,
@@ -47,10 +49,14 @@ _DEFAULT_SEM_W = 0.6
 _DEFAULT_BM25_W = 0.3
 _DEFAULT_SYM_W = 0.1
 
+# Maximum additive bonus for exact string match in code.
+_EXACT_MATCH_MAX_BOOST = 0.15
+
 
 class HybridRanker:
     """
-    Combines semantic, keyword, and symbol-name signals into one ranked list.
+    Combines semantic, keyword, symbol-name, and exact-match signals into
+    one ranked list.
 
     Parameters
     ----------
@@ -89,7 +95,7 @@ class HybridRanker:
         *,
         top_k: int = 10,
         language_filter: Optional[Language] = None,
-        repo_filter: Optional[str] = None,
+        repo_filter: Optional[Union[str, list[str]]] = None,
         embedder=None,
     ) -> SearchResponse:
         """
@@ -108,7 +114,8 @@ class HybridRanker:
         language_filter:
             Restrict results to a specific programming language.
         repo_filter:
-            When provided, only chunks from this repo_name are returned.
+            When provided, only chunks from this repo_name (or list of names)
+            are returned.
         embedder:
             ``Embedder`` instance used to encode the query.  If None, one is
             created via ``get_embedder()`` using the default model.
@@ -161,11 +168,13 @@ class HybridRanker:
             sem_s = sem_scores.get(cid, 0.0)
             bm25_s = bm25_scores.get(cid, 0.0)
             sym_s = _symbol_score(query, chunk.symbol_name)
+            exact_s = _exact_match_boost(query, chunk.code)
 
             fused = (
                 self.semantic_weight * sem_s
                 + self.bm25_weight * bm25_s
                 + self.symbol_weight * sym_s
+                + exact_s
             )
             fused = float(min(max(fused, 0.0), 1.0))
 
@@ -239,6 +248,37 @@ def _symbol_score(query: str, symbol_name: Optional[str]) -> float:
         return 0.6
     if sym in q:
         return 0.4
+    return 0.0
+
+
+# ── Exact-match boosting ──────────────────────────────────────────────────────
+
+def _exact_match_boost(query: str, code: str) -> float:
+    """
+    Return a small bonus [0, 0.15] when the query string appears verbatim
+    in the chunk's source code.
+
+    This rewards literal string matches (e.g. exact function names, error
+    messages, API endpoints) that embedding models may not capture well.
+
+    Tiers
+    -----
+    0.15  — query appears as an exact case-sensitive match in code
+    0.08  — query appears as a case-insensitive match in code
+    0.00  — no match
+    """
+    if not query or not code:
+        return 0.0
+
+    q = query.strip()
+    if len(q) < 3:
+        # Too short to be meaningful — skip to avoid false positives.
+        return 0.0
+
+    if q in code:
+        return _EXACT_MATCH_MAX_BOOST
+    if q.lower() in code.lower():
+        return _EXACT_MATCH_MAX_BOOST * 0.53  # ≈ 0.08
     return 0.0
 
 

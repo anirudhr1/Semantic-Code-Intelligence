@@ -1,7 +1,7 @@
 """
 routes_index.py
 ---------------
-POST /api/index   — index a repo (auto-replaces existing chunks for same repo)
+POST /api/index   — index a repo (incremental: skips unchanged files)
 GET  /api/index/status — poll current indexing progress
 """
 
@@ -23,6 +23,7 @@ from backend.app.utils.chunking import (
     filter_empty_chunks,
     split_oversized_chunks,
 )
+from backend.app.utils.file_hash_cache import FileHashCache
 
 logger = logging.getLogger(__name__)
 
@@ -113,8 +114,9 @@ async def index_status(request: Request) -> dict:
     summary="Index a repository",
     description=(
         "Index a local directory or a remote git repository. "
-        "If the repo_name already exists in the index, its old chunks are "
-        "automatically removed before the new ones are inserted (clean re-index). "
+        "Uses incremental indexing by default: only new and modified files "
+        "are re-embedded, unchanged files are skipped. "
+        "Set `force: true` to re-index everything from scratch. "
         "Poll GET /api/index/status for live progress."
     ),
 )
@@ -124,6 +126,7 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
     vector_store  = _get_vector_store(request)
     keyword_index = _get_keyword_index(request)
     progress      = _get_progress(request)
+    hash_cache    = FileHashCache(settings.index_dir)
 
     progress.reset()
     progress.active = True
@@ -155,24 +158,80 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
         progress.files_total = repo_result.file_count
         progress.message     = f"Found {repo_result.file_count} files"
 
-        # ── FIX 1: auto-clear old chunks for this repo before re-indexing ────
+        # ── 2. Incremental diff — decide which files to process ───────────────
+        skipped_unchanged = 0
+        files_to_process = repo_result.source_files
+        new_hashes: Optional[dict] = None
+
         existing_repos = vector_store.list_repos()
-        if repo_name in existing_repos:
-            logger.info("Re-indexing '%s' — removing %d existing chunks first.", repo_name,
-                        sum(1 for c in vector_store.get_all_chunks() if c.repo_name == repo_name))
+        is_reindex = repo_name in existing_repos
+
+        if is_reindex and not body.force:
+            # Incremental mode: only process changed files
+            progress.stage   = "diffing"
+            progress.message = "Computing file diffs…"
+
+            changed, new_hashes = hash_cache.get_changed_files(
+                repo_name=repo_name,
+                source_files=repo_result.source_files,
+                repo_root=repo_result.repo_root,
+            )
+
+            skipped_unchanged = len(changed.unchanged)
+            files_to_process = changed.files_to_process
+
+            # Remove chunks for deleted files
+            for deleted_rel in changed.deleted:
+                vector_store.delete_by_file(repo_name, deleted_rel)
+                keyword_index.delete_by_file(repo_name, deleted_rel)
+
+            # Remove chunks for modified files (they'll be re-inserted below)
+            for mod_file in changed.modified:
+                rel_path = str(mod_file.relative_to(repo_result.repo_root))
+                vector_store.delete_by_file(repo_name, rel_path)
+                keyword_index.delete_by_file(repo_name, rel_path)
+
+            if not changed.has_changes:
+                # Nothing changed — skip entirely
+                duration = round(time.perf_counter() - t_start, 2)
+                progress.stage   = "done"
+                progress.message = f"No changes — {skipped_unchanged} files unchanged"
+                progress.active  = False
+
+                hash_cache.save(repo_name, new_hashes)
+
+                return IndexResponse(
+                    repo_name=repo_name,
+                    chunks_indexed=0,
+                    files_processed=repo_result.file_count,
+                    skipped_files=repo_result.skipped_files,
+                    skipped_unchanged=skipped_unchanged,
+                    duration_seconds=duration,
+                    message=f"No changes detected — {skipped_unchanged} files unchanged.",
+                )
+
+            progress.files_total = len(files_to_process)
+            progress.message = (
+                f"Processing {len(files_to_process)} changed files "
+                f"(skipping {skipped_unchanged} unchanged)"
+            )
+
+        elif is_reindex and body.force:
+            # Force re-index: clear everything first
             progress.stage   = "clearing"
             progress.message = f"Removing previous index for '{repo_name}'…"
             vector_store.delete_repo(repo_name)
             keyword_index.delete_repo(repo_name)
+            hash_cache.delete(repo_name)
 
-        # ── 2. Extract AST chunks from every source file ──────────────────────
+        # ── 3. Extract AST chunks from files to process ───────────────────────
         progress.stage   = "extracting"
         progress.message = "Extracting code chunks…"
 
         all_chunks    = []
         skipped_files = repo_result.skipped_files
 
-        for file_path in repo_result.source_files:
+        for file_path in files_to_process:
             rel_path = str(file_path.relative_to(repo_result.repo_root))
             try:
                 chunks = extract_chunks(file_path, repo_name=repo_name, language=body.language)
@@ -190,66 +249,72 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
         all_chunks = filter_empty_chunks(all_chunks)
         all_chunks = deduplicate_chunks(all_chunks)
 
-        if not all_chunks:
+        if not all_chunks and not is_reindex:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="No code chunks could be extracted from this repository.",
             )
 
-        progress.chunks_total = len(all_chunks)
-        progress.message      = f"Extracted {len(all_chunks)} chunks — embedding…"
+        if all_chunks:
+            progress.chunks_total = len(all_chunks)
+            progress.message      = f"Extracted {len(all_chunks)} chunks — embedding…"
 
-        # ── 3. Embed ──────────────────────────────────────────────────────────
-        progress.stage = "embedding"
+            # ── 4. Embed ──────────────────────────────────────────────────────
+            progress.stage = "embedding"
 
-        try:
-            from backend.app.embeddings.embedder import get_embedder
-            import numpy as np
+            try:
+                from backend.app.embeddings.embedder import get_embedder
+                import numpy as np
 
-            embedder = get_embedder(settings.embedding_model)
+                embedder = get_embedder(settings.embedding_model)
 
-            # Pre-allocate the full output array — avoids building a list of
-            # intermediate arrays and calling np.concatenate at the end.
-            embeddings = np.empty(
-                (len(all_chunks), embedder.dimension), dtype=np.float32
-            )
-
-            for i in range(0, len(all_chunks), _EMBEDDING_BATCH_SIZE):
-                batch = all_chunks[i : i + _EMBEDDING_BATCH_SIZE]
-                # encode_chunks is the single source of truth for chunk→text
-                # conversion (symbol_name + docstring + code).  No local
-                # _chunk_text duplicate needed.
-                embeddings[i : i + len(batch)] = embedder.encode_chunks(batch)
-                progress.chunks_done = min(i + _EMBEDDING_BATCH_SIZE, len(all_chunks))
-                progress.message = (
-                    f"Embedding {progress.chunks_done}/{len(all_chunks)} chunks…"
+                # Pre-allocate the full output array.
+                embeddings = np.empty(
+                    (len(all_chunks), embedder.dimension), dtype=np.float32
                 )
 
-        except Exception as exc:
-            logger.exception("Embedding failed: %s", exc)
-            progress.error = str(exc)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Embedding error: {exc}",
-            )
+                for i in range(0, len(all_chunks), _EMBEDDING_BATCH_SIZE):
+                    batch = all_chunks[i : i + _EMBEDDING_BATCH_SIZE]
+                    embeddings[i : i + len(batch)] = embedder.encode_chunks(batch)
+                    progress.chunks_done = min(i + _EMBEDDING_BATCH_SIZE, len(all_chunks))
+                    progress.message = (
+                        f"Embedding {progress.chunks_done}/{len(all_chunks)} chunks…"
+                    )
 
-        # ── 4. Insert into indexes ────────────────────────────────────────────
-        progress.stage   = "indexing"
-        progress.message = "Inserting into index…"
+            except Exception as exc:
+                logger.exception("Embedding failed: %s", exc)
+                progress.error = str(exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Embedding error: {exc}",
+                )
 
-        try:
-            vector_store.add(all_chunks, embeddings)
-            keyword_index.add(all_chunks)
-        except Exception as exc:
-            logger.exception("Index insertion failed: %s", exc)
-            progress.error = str(exc)
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Index insertion error: {exc}",
-            )
+            # ── 5. Insert into indexes ────────────────────────────────────────
+            progress.stage   = "indexing"
+            progress.message = "Inserting into index…"
+
+            try:
+                vector_store.add(all_chunks, embeddings)
+                keyword_index.add(all_chunks)
+            except Exception as exc:
+                logger.exception("Index insertion failed: %s", exc)
+                progress.error = str(exc)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Index insertion error: {exc}",
+                )
 
         vector_store.save()
         keyword_index.save()
+
+        # ── 6. Save file hash cache ───────────────────────────────────────────
+        if new_hashes is None:
+            # First index or force mode — compute hashes now
+            new_hashes = {}
+            for file_path in repo_result.source_files:
+                rel_path = str(file_path.relative_to(repo_result.repo_root))
+                new_hashes[rel_path] = FileHashCache.compute_hash(file_path)
+        hash_cache.save(repo_name, new_hashes)
 
         duration = round(time.perf_counter() - t_start, 2)
         progress.stage        = "done"
@@ -257,14 +322,21 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
         progress.message      = f"Done — {len(all_chunks)} chunks in {duration}s"
         progress.active       = False
 
-        logger.info("Indexing complete for '%s': %d chunks in %.2fs.", repo_name, len(all_chunks), duration)
+        incremental_note = ""
+        if skipped_unchanged > 0:
+            incremental_note = f" ({skipped_unchanged} unchanged files skipped)"
+
+        logger.info("Indexing complete for '%s': %d chunks in %.2fs.%s",
+                     repo_name, len(all_chunks), duration, incremental_note)
 
         return IndexResponse(
             repo_name=repo_name,
             chunks_indexed=len(all_chunks),
             files_processed=repo_result.file_count,
             skipped_files=skipped_files,
+            skipped_unchanged=skipped_unchanged,
             duration_seconds=duration,
+            message=f"Indexed {len(all_chunks)} chunks{incremental_note}.",
         )
 
     except HTTPException:
@@ -274,5 +346,3 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
         progress.active = False
         progress.error  = str(exc)
         raise
-
-

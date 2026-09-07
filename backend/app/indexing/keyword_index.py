@@ -130,7 +130,7 @@ class KeywordIndex:
         query: str,
         top_k: int = 10,
         language_filter: Optional[Language] = None,
-        repo_filter: Optional[str] = None,
+        repo_filter: Optional["str | list[str]"] = None,
     ) -> list[tuple[CodeChunk, float]]:
         """
         Retrieve the top-k chunks matching ``query`` using BM25.
@@ -139,6 +139,7 @@ class KeywordIndex:
         -------
         List of (CodeChunk, normalised_bm25_score) sorted highest-first.
         Scores are normalised to [0, 1].
+        repo_filter can be a single repo name or a list of repo names.
         """
         if self._bm25 is None or self.size == 0:
             return []
@@ -147,6 +148,14 @@ class KeywordIndex:
         if not query_tokens:
             return []
 
+        # Normalise repo_filter to a set for fast membership checks.
+        repo_set: Optional[set[str]] = None
+        if repo_filter:
+            if isinstance(repo_filter, str):
+                repo_set = {repo_filter}
+            else:
+                repo_set = set(repo_filter)
+
         raw_scores: list[float] = self._bm25.get_scores(query_tokens).tolist()
 
         # Pair with chunks and filter
@@ -154,7 +163,7 @@ class KeywordIndex:
         for chunk, score in zip(self._chunks, raw_scores):
             if language_filter and chunk.language != language_filter.value:
                 continue
-            if repo_filter and chunk.repo_name != repo_filter:
+            if repo_set and chunk.repo_name not in repo_set:
                 continue
             paired.append((chunk, score))
 
@@ -205,6 +214,38 @@ class KeywordIndex:
         logger.info(
             "Deleted %d chunks for repo '%s'. Remaining: %d.",
             removed, repo_name, self.size,
+        )
+        return removed
+
+    def delete_by_file(self, repo_name: str, file_path: str) -> int:
+        """
+        Remove all chunks for a specific file within a repo and rebuild BM25.
+
+        Used by incremental re-indexing to remove stale chunks before
+        re-inserting updated ones.
+
+        Returns the number of chunks removed.
+        """
+        pairs = [
+            (c, tok)
+            for c, tok in zip(self._chunks, self._corpus)
+            if not (c.repo_name == repo_name and c.file_path == file_path)
+        ]
+        removed = len(self._chunks) - len(pairs)
+        if removed == 0:
+            return 0
+
+        self._chunks = [c for c, _ in pairs]
+        self._corpus = [tok for _, tok in pairs]
+
+        if self._chunks:
+            self._rebuild()
+        else:
+            self._bm25 = None
+
+        logger.debug(
+            "Deleted %d chunks for file '%s' in repo '%s'. Remaining: %d.",
+            removed, file_path, repo_name, self.size,
         )
         return removed
 

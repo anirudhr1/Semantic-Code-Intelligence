@@ -63,7 +63,10 @@ async def search(
     ),
     repo_name: Optional[str] = Query(
         default=None,
-        description="Filter results to a specific indexed repository.",
+        description=(
+            "Filter results to specific indexed repositories. "
+            "Accepts a single name or comma-separated list (e.g. 'repo1,repo2')."
+        ),
     ),
 ) -> SearchResponse:
     effective_top_k = top_k if top_k is not None else settings.default_top_k
@@ -76,6 +79,12 @@ async def search(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No code has been indexed yet. POST to /api/index first.",
         )
+
+    # Parse repo_name: support comma-separated list for multi-repo filtering.
+    repo_filter: Optional[list[str] | str] = None
+    if repo_name:
+        parts = [r.strip() for r in repo_name.split(",") if r.strip()]
+        repo_filter = parts[0] if len(parts) == 1 else parts
 
     ranker = get_ranker(
         semantic_weight=settings.semantic_weight,
@@ -93,7 +102,7 @@ async def search(
             keyword_index=keyword_index,
             top_k=effective_top_k,
             language_filter=language,
-            repo_filter=repo_name,
+            repo_filter=repo_filter,
             embedder=embedder,
         )
     except Exception as exc:

@@ -1,13 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Semantic Code Intelligence — hybrid semantic and keyword search over source code repositories." />
   <title>Semantic Code Intelligence</title>
   <link rel="stylesheet" href="/frontend/style.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <!-- Highlight.js — atom-one-dark theme for syntax highlighting -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css" id="hljs-dark-theme" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-light.min.css" id="hljs-light-theme" disabled />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
 </head>
 <body>
 <div class="app-shell">
@@ -19,9 +24,14 @@
         <div class="logo-icon" aria-hidden="true">⚡</div>
         Semantic Code Intelligence
       </div>
-      <div class="header-status" id="api-status" aria-live="polite">
-        <div class="status-dot" id="status-dot"></div>
-        <span id="status-text">checking…</span>
+      <div class="header-right">
+        <div class="header-status" id="api-status" aria-live="polite">
+          <div class="status-dot" id="status-dot"></div>
+          <span id="status-text">checking…</span>
+        </div>
+        <button class="theme-toggle" id="theme-toggle" aria-label="Toggle light/dark theme" title="Toggle theme">
+          <span class="theme-icon" id="theme-icon">🌙</span>
+        </button>
       </div>
     </div>
   </header>
@@ -29,6 +39,27 @@
   <!-- ── Main ───────────────────────────────────────────────────────────── -->
   <main>
     <div class="container">
+
+      <!-- ── Welcome Banner (first-time visitors) ──────────────────────── -->
+      <div class="welcome-banner" id="welcome-banner" hidden>
+        <button class="welcome-dismiss" id="welcome-dismiss" aria-label="Dismiss welcome banner">&times;</button>
+        <h2>Welcome to Semantic Code Intelligence 👋</h2>
+        <p>Search your code repositories using natural language — powered by AI embeddings, entirely on your machine.</p>
+        <div class="welcome-steps">
+          <div class="welcome-step">
+            <span class="step-num">1</span>
+            <span>Go to <strong>Index Repo</strong> and add a code repository</span>
+          </div>
+          <div class="welcome-step">
+            <span class="step-num">2</span>
+            <span>Wait for indexing to complete (the AI reads your code)</span>
+          </div>
+          <div class="welcome-step">
+            <span class="step-num">3</span>
+            <span>Switch to <strong>Search</strong> and ask questions in plain English!</span>
+          </div>
+        </div>
+      </div>
 
       <!-- Tabs -->
       <nav class="tabs" role="tablist" aria-label="Main sections">
@@ -53,6 +84,23 @@
           <button class="btn btn-primary" id="search-btn" type="button">
             Search
           </button>
+        </div>
+
+        <!-- Example queries for first-time users -->
+        <div class="example-queries" id="example-queries">
+          <span class="example-label">Try:</span>
+          <button class="example-pill" data-query="find authentication logic">find authentication logic</button>
+          <button class="example-pill" data-query="error handling">error handling</button>
+          <button class="example-pill" data-query="database connection">database connection</button>
+          <button class="example-pill" data-query="parse JSON">parse JSON</button>
+          <button class="example-pill" data-query="API endpoint">API endpoint</button>
+        </div>
+
+        <!-- Recent searches -->
+        <div class="recent-searches" id="recent-searches" hidden>
+          <span class="recent-label">Recent:</span>
+          <div class="recent-pills" id="recent-pills"></div>
+          <button class="recent-clear" id="recent-clear" title="Clear search history">✕</button>
         </div>
 
         <div class="search-filters" role="group" aria-label="Search filters">
@@ -96,11 +144,15 @@
             <span class="stat-value" id="stat-count">—</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">Indexed chunks</span>
+            <span class="stat-label">Indexed chunks
+              <span class="tooltip-trigger" data-tooltip="Total number of code pieces (functions, classes, etc.) stored in the search index.">(?)</span>
+            </span>
             <span class="stat-value" id="stat-total">—</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">Top score</span>
+            <span class="stat-label">Top score
+              <span class="tooltip-trigger" data-tooltip="How relevant the best result is. Higher is better (100% = perfect match).">(?)</span>
+            </span>
             <span class="stat-value" id="stat-top-score">—</span>
           </div>
         </div>
@@ -198,7 +250,9 @@
             <span class="stat-value" id="istat-repo">—</span>
           </div>
           <div class="stat-item">
-            <span class="stat-label">Chunks indexed</span>
+            <span class="stat-label">Chunks indexed
+              <span class="tooltip-trigger" data-tooltip="Number of code pieces (functions, classes, blocks) extracted and stored.">(?)</span>
+            </span>
             <span class="stat-value" id="istat-chunks">—</span>
           </div>
           <div class="stat-item">
@@ -208,6 +262,12 @@
           <div class="stat-item">
             <span class="stat-label">Skipped files</span>
             <span class="stat-value" id="istat-skipped">—</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Unchanged
+              <span class="tooltip-trigger" data-tooltip="Files that haven't changed since last index — skipped to save time.">(?)</span>
+            </span>
+            <span class="stat-value" id="istat-unchanged">—</span>
           </div>
           <div class="stat-item">
             <span class="stat-label">Duration</span>
@@ -248,6 +308,9 @@
 
     </div><!-- /container -->
   </main>
+
+  <!-- ── Toast container ──────────────────────────────────────────────── -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
 
   <!-- ── Footer ─────────────────────────────────────────────────────────── -->
   <footer>
