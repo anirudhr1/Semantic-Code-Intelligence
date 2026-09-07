@@ -20,6 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from backend.app.config import settings
 from backend.app.models.schemas import DeleteRepoResponse, RepoInfo, RepoListResponse
+from backend.app.api.dependencies import get_vector_store, get_keyword_index
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,11 @@ router = APIRouter()
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _get_vector_store(request: Request):
-    return request.app.state.vector_store
+    return get_vector_store(request)
 
 
 def _get_keyword_index(request: Request):
-    return request.app.state.keyword_index
+    return get_keyword_index(request)
 
 
 def _clone_path(repo_name: str) -> Path:
@@ -57,14 +58,19 @@ def _dir_size_mb(path: Path) -> float:
     status_code=status.HTTP_200_OK,
     summary="List indexed repositories",
     description=(
-        "Returns every distinct repository currently in the index, "
-        "including chunk counts and whether the cloned source files "
-        "are still present on disk."
+        "Returns every distinct repository currently in the index. "
+        "Pass `include_size=true` to also calculate on-disk clone sizes "
+        "(triggers a directory walk per repo — omit for faster responses)."
     ),
 )
-async def list_repos(request: Request) -> RepoListResponse:
-    vector_store  = _get_vector_store(request)
-    keyword_index = _get_keyword_index(request)
+async def list_repos(
+    request: Request,
+    include_size: bool = Query(
+        default=False,
+        description="Calculate disk usage of each cloned repo. Adds latency for large clones.",
+    ),
+) -> RepoListResponse:
+    vector_store = _get_vector_store(request)
 
     # Collect chunk counts per repo from the vector store (single source of truth).
     all_chunks = vector_store.get_all_chunks()
@@ -75,9 +81,10 @@ async def list_repos(request: Request) -> RepoListResponse:
 
     repos: list[RepoInfo] = []
     for repo_name, chunk_count in sorted(counts.items()):
-        clone = _clone_path(repo_name)
+        clone    = _clone_path(repo_name)
         has_clone = clone.exists() and clone.is_dir()
-        size_mb = _dir_size_mb(clone) if has_clone else 0.0
+        # Only walk the directory tree when the caller explicitly asks for it.
+        size_mb  = _dir_size_mb(clone) if (include_size and has_clone) else 0.0
         repos.append(
             RepoInfo(
                 repo_name=repo_name,

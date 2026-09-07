@@ -245,7 +245,8 @@ def _walk_tree(
                 docstring=docstring,
             )
         )
-        # Still recurse to catch nested classes / inner functions
+        # Still recurse to catch nested classes / inner functions.
+        # Increment depth here so the limit applies from this node downward.
         depth += 1
 
     for child in node.children:
@@ -257,7 +258,7 @@ def _walk_tree(
             file_path=file_path,
             repo_name=repo_name,
             chunks=chunks,
-            depth=depth,
+            depth=depth + 1,  # always increment — prevents runaway on non-chunk nesting
         )
 
 

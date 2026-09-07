@@ -151,7 +151,7 @@ setInterval(() => checkHealth(true), HEALTH_INTERVAL_MS);
  */
 async function refreshRepoDropdown() {
   try {
-    const data = await apiFetch("/api/repos");
+    const data = await apiFetch("/api/repos");  // size not needed for dropdown
     const current = filterRepo.value;
 
     // Keep "All repositories" as first option, then add one per repo.
@@ -410,7 +410,8 @@ async function loadRepos() {
   clearAlert(manageAlert);
 
   try {
-    const data = await apiFetch("/api/repos");
+    // include_size=true so the management card can show disk usage
+    const data = await apiFetch("/api/repos?include_size=true");
 
     if (!data.repos || data.repos.length === 0) {
       repoListEl.innerHTML = `

@@ -13,7 +13,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
 
 from backend.app.config import settings
 from backend.app.ingestion.ast_extractor import extract_chunks
@@ -64,6 +63,8 @@ class IndexProgress:
 
 
 # ── Dependency helpers ────────────────────────────────────────────────────────
+# Thin wrappers kept here so existing call-sites inside this file don't change.
+# The shared implementations live in dependencies.py.
 
 def _get_vector_store(request: Request):
     return request.app.state.vector_store
@@ -199,22 +200,27 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
 
         try:
             from backend.app.embeddings.embedder import get_embedder
-            embedder   = get_embedder(settings.embedding_model)
-
-            # Embed in batches so we can update progress mid-way.
-            BATCH = 64
             import numpy as np
-            all_embeddings = []
-            for i in range(0, len(all_chunks), BATCH):
-                batch = all_chunks[i: i + BATCH]
-                embs  = embedder.encode(
-                    [_chunk_text(c) for c in batch]
-                )
-                all_embeddings.append(embs)
-                progress.chunks_done  = min(i + BATCH, len(all_chunks))
-                progress.message      = f"Embedding {progress.chunks_done}/{len(all_chunks)} chunks…"
 
-            embeddings = np.concatenate(all_embeddings, axis=0)
+            embedder = get_embedder(settings.embedding_model)
+
+            # Pre-allocate the full output array — avoids building a list of
+            # intermediate arrays and calling np.concatenate at the end.
+            _BATCH = 64
+            embeddings = np.empty(
+                (len(all_chunks), embedder.dimension), dtype=np.float32
+            )
+
+            for i in range(0, len(all_chunks), _BATCH):
+                batch = all_chunks[i : i + _BATCH]
+                # encode_chunks is the single source of truth for chunk→text
+                # conversion (symbol_name + docstring + code).  No local
+                # _chunk_text duplicate needed.
+                embeddings[i : i + len(batch)] = embedder.encode_chunks(batch)
+                progress.chunks_done = min(i + _BATCH, len(all_chunks))
+                progress.message = (
+                    f"Embedding {progress.chunks_done}/{len(all_chunks)} chunks…"
+                )
 
         except Exception as exc:
             logger.exception("Embedding failed: %s", exc)
@@ -267,14 +273,3 @@ async def index_repository(body: IndexRequest, request: Request) -> IndexRespons
         raise
 
 
-# ── Helper ────────────────────────────────────────────────────────────────────
-
-def _chunk_text(chunk) -> str:
-    """Build the text to embed for a chunk (mirrors embedder._chunk_to_text)."""
-    parts = []
-    if chunk.symbol_name:
-        parts.append(chunk.symbol_name)
-    if chunk.docstring:
-        parts.append(chunk.docstring)
-    parts.append(chunk.code)
-    return "\n\n".join(parts)

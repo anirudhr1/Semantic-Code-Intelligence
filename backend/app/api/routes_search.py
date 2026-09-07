@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from backend.app.config import settings
 from backend.app.models.schemas import Language, SearchResponse
 from backend.app.ranking.hybrid_ranker import get_ranker
+from backend.app.api.dependencies import get_vector_store, get_keyword_index
 
 logger = logging.getLogger(__name__)
 
@@ -28,11 +29,11 @@ router = APIRouter()
 
 
 def _get_vector_store(request: Request):
-    return request.app.state.vector_store
+    return get_vector_store(request)
 
 
 def _get_keyword_index(request: Request):
-    return request.app.state.keyword_index
+    return get_keyword_index(request)
 
 
 @router.get(
