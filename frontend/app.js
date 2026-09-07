@@ -294,6 +294,47 @@ srcUrlBtn.addEventListener("click",   () => setSourceMode("url"));
 
 // ── Index repo ────────────────────────────────────────────────────────────────
 
+// Progress label element — injected below the progress bar
+const progressLabel = $("#progress-label");
+
+let _pollTimer = null;
+
+function startProgressPolling() {
+  stopProgressPolling();
+  _pollTimer = setInterval(async () => {
+    try {
+      const s = await apiFetch("/api/index/status");
+      updateProgressUI(s);
+    } catch (_) { /* server might briefly be busy — ignore */ }
+  }, 800);
+}
+
+function stopProgressPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
+}
+
+function updateProgressUI(s) {
+  if (!s.active && s.stage !== "done") return;
+
+  // Stage label
+  const stageLabels = {
+    cloning:    "Cloning repository…",
+    clearing:   "Clearing old index…",
+    extracting: `Extracting files… ${s.files_done}/${s.files_total}`,
+    embedding:  `Embedding chunks… ${s.chunks_done}/${s.chunks_total}`,
+    indexing:   "Inserting into index…",
+    done:       "Complete!",
+  };
+  const label = stageLabels[s.stage] || s.message || s.stage;
+  if (progressLabel) progressLabel.textContent = label;
+
+  // Switch from indeterminate to determinate once we have chunk counts
+  if (s.stage === "embedding" && s.chunks_total > 0) {
+    progressFill.className = "progress-fill";
+    progressFill.style.width = `${s.pct}%`;
+  }
+}
+
 async function runIndex() {
   clearAlert(indexAlert);
   indexStats.hidden = true;
@@ -315,12 +356,19 @@ async function runIndex() {
   indexBtn.innerHTML     = '<span class="spinner" aria-hidden="true"></span> Indexing…';
   indexProgress.hidden   = false;
   progressFill.className = "progress-fill indeterminate";
+  progressFill.style.width = "";
+  if (progressLabel) progressLabel.textContent = "Starting…";
+
+  // Start polling /api/index/status while the POST is in flight
+  startProgressPolling();
 
   try {
     const data = await apiFetch("/api/index", { method: "POST", body: JSON.stringify(body) });
 
-    progressFill.className  = "progress-fill";
+    stopProgressPolling();
+    progressFill.className   = "progress-fill";
     progressFill.style.width = "100%";
+    if (progressLabel) progressLabel.textContent = `Done — ${data.chunks_indexed.toLocaleString()} chunks indexed`;
 
     istatRepo.textContent     = data.repo_name;
     istatChunks.textContent   = data.chunks_indexed.toLocaleString();
@@ -333,18 +381,22 @@ async function runIndex() {
       `Indexed ${data.chunks_indexed.toLocaleString()} chunks from "${data.repo_name}" in ${data.duration_seconds}s.`,
       "success");
 
-    // Refresh both header and the repo list + search dropdown.
     checkHealth(true);
     loadRepos();
     refreshRepoDropdown();
   } catch (err) {
+    stopProgressPolling();
     progressFill.className   = "progress-fill";
     progressFill.style.width = "0%";
+    if (progressLabel) progressLabel.textContent = "";
     showAlert(indexAlert, `Indexing failed: ${err.message}`, "error");
   } finally {
     indexBtn.disabled     = false;
     indexBtn.textContent  = "Index repository";
-    setTimeout(() => { indexProgress.hidden = true; }, 1200);
+    setTimeout(() => {
+      indexProgress.hidden = true;
+      if (progressLabel) progressLabel.textContent = "";
+    }, 2000);
   }
 }
 

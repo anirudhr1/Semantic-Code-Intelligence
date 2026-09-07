@@ -188,7 +188,18 @@ class HybridRanker:
                 )
             )
 
-        # ── 5. Sort and truncate ──────────────────────────────────────────────
+        # ── 5. Deduplicate by stable identity (file_path + start_line) ──────────
+        # chunk_id is a fresh uuid4 each index run, so two index runs of the
+        # same file produce different IDs for identical code.  Dedup by the
+        # content fingerprint instead — keep the highest-scoring copy.
+        seen: dict[str, SearchResult] = {}
+        for r in results:
+            key = f"{r.file_path}:{r.start_line}"
+            if key not in seen or r.score > seen[key].score:
+                seen[key] = r
+        results = list(seen.values())
+
+        # ── 6. Sort and truncate ──────────────────────────────────────────────
         results.sort(key=lambda r: r.score, reverse=True)
         results = results[:top_k]
 
